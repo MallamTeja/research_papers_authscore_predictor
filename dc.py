@@ -1,5 +1,6 @@
 import json
 import time
+import random
 from pathlib import Path
 from typing import List, Dict, Set, Optional
 from datetime import datetime, timezone
@@ -7,21 +8,32 @@ from datetime import datetime, timezone
 import arxiv
 from arxiv2text import arxiv_to_text
 
+PNOS1_PATH = Path("papernumbers1.json")
+PNOS2_PATH = Path("papernumbers2.json")
+PNOS3_PATH = Path("papernumbers3.json")
 
-PNOS_PATH = Path("papernumbers.json")
 DATASET_PATH = Path("dataset.json")
 
 client = arxiv.Client()
-
 MAX_TEXT_CHARS = 2_000_000
 
 
-def load_paper_ids() -> List[str]:
-    if not PNOS_PATH.exists():
-        raise FileNotFoundError(f"{PNOS_PATH} not found")
-    with open(PNOS_PATH, "r", encoding="utf-8") as f:
+def load_paper_ids_from_file(path: Path, batch_id: int) -> List[Dict]:
+    if not path.exists():
+        print(f"[WARN] {path} not found, skipping")
+        return []
+    with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-    return [pid.strip() for pid in data.get("paper_ids", []) if pid.strip()]
+    ids = [pid.strip() for pid in data.get("paper_ids", []) if pid.strip()]
+    return [{"arxiv_id": pid, "batch": batch_id} for pid in ids]
+
+
+def load_all_papers_with_batches() -> List[Dict]:
+    papers = []
+    papers.extend(load_paper_ids_from_file(PNOS1_PATH, batch_id=1))
+    papers.extend(load_paper_ids_from_file(PNOS2_PATH, batch_id=2))
+    papers.extend(load_paper_ids_from_file(PNOS3_PATH, batch_id=3))
+    return papers
 
 
 def load_existing_dataset() -> List[Dict]:
@@ -38,7 +50,7 @@ def get_existing_ids(dataset: List[Dict]) -> Set[str]:
     return {item.get("arxiv_id") for item in dataset if "arxiv_id" in item}
 
 
-def fetch_metadata_for_ids(ids: List[str]) -> List[arxiv.Result]:
+def fetch_metadata_for_ids(ids: List[str]):
     if not ids:
         return []
     search = arxiv.Search(id_list=ids)
@@ -67,15 +79,31 @@ def compute_years_since_published(published_dt: Optional[datetime]) -> float:
     return max(delta_years, 0.0)
 
 
-def result_to_obj(r: arxiv.Result, full_text: str) -> Dict:
-    if not full_text.strip():
-        full_text = r.summary
+def assign_random_score_for_batch(batch_id: int) -> int:
+    if batch_id == 1:
+        return random.randint(75, 100)
+    elif batch_id == 2:
+        return random.randint(45, 80)
+    else:
+        return random.randint(1, 45)
 
-    arxiv_id = r.get_short_id()
-    doi = getattr(r, "doi", None)
+
+def build_paper_number_mapping(all_ids: List[str]) -> Dict[str, int]:
+    sorted_ids = sorted(set(all_ids))
+    return {pid: idx + 1 for idx, pid in enumerate(sorted_ids)}
+
+
+def result_to_obj(
+    arxiv_id: str,
+    r: arxiv.Result,
+    full_text: str,
+    paper_number: int,
+    manual_score: int,
+) -> Dict:
+    if not full_text.strip():
+        full_text = r.summary or ""
 
     author_count = len(r.authors) if r.authors else 0
-    is_author_count_large = author_count > 7
 
     published_dt = r.published if isinstance(r.published, datetime) else None
     years_since_published = compute_years_since_published(published_dt)
@@ -86,9 +114,10 @@ def result_to_obj(r: arxiv.Result, full_text: str) -> Dict:
 
     return {
         "arxiv_id": arxiv_id,
+        "paper_number": paper_number,
+        "manual_score": manual_score,
         "title": r.title,
         "author_count": author_count,
-        "is_author_count_large": is_author_count_large,
         "summary": summary,
         "summary_len": summary_len,
         "primary_category": r.primary_category,
@@ -97,47 +126,80 @@ def result_to_obj(r: arxiv.Result, full_text: str) -> Dict:
         "updated": r.updated.isoformat() if r.updated else None,
         "years_since_published": years_since_published,
         "pdf_url": r.pdf_url,
-        "doi": doi,
-        "has_doi": bool(doi),
         "text": full_text,
         "text_len": text_len,
     }
 
 
 def main():
-    paper_ids = load_paper_ids()
+    paper_records = load_all_papers_with_batches()
+    if not paper_records:
+        print("No paper IDs found in any papernumbers*.json file.")
+        return
+
+    all_ids = [rec["arxiv_id"] for rec in paper_records]
+    paper_number_map = build_paper_number_mapping(all_ids)
+
     dataset = load_existing_dataset()
     existing_ids = get_existing_ids(dataset)
 
+    to_process = [rec for rec in paper_records if rec["arxiv_id"] not in existing_ids]
+    if not to_process:
+        print("No new paper IDs found. Nothing to do.")
+        return
+
     import sys
-    limit = 2
+    limit = len(to_process)
     if len(sys.argv) > 1:
         try:
             limit = int(sys.argv[1])
         except ValueError:
-            print(f"Invalid limit argument: {sys.argv[1]}. Using default limit of {limit}.")
+            print(f"Invalid limit argument: {sys.argv[1]}. Using default limit {limit}.")
 
-    new_ids = [pid for pid in paper_ids if pid not in existing_ids][:limit]
-    if not new_ids:
-        print("No new paper IDs found. Nothing to do.")
-        return
+    to_process = to_process[:limit]
+    ids_only = [rec["arxiv_id"] for rec in to_process]
 
-    print(f"Processing {len(new_ids)} papers (limited to {limit})...")
-    results = fetch_metadata_for_ids(new_ids)
+    print(f"Processing {len(to_process)} papers...")
+    results = fetch_metadata_for_ids(ids_only)
     if not results:
         print("No results returned from arXiv for the new IDs.")
         return
 
+    result_map: Dict[str, arxiv.Result] = {}
+    for r in results:
+        rid = r.entry_id.split("/")[-1]
+        result_map[rid] = r
+
+    batch_map = {rec["arxiv_id"]: rec["batch"] for rec in to_process}
+    score_map = {
+        rec["arxiv_id"]: assign_random_score_for_batch(rec["batch"])
+        for rec in to_process
+    }
+
     new_entries: List[Dict] = []
-    for i, r in enumerate(results):
-        sid = r.get_short_id()
-        print(f"[{i+1}/{len(results)}] {sid} - {r.title}")
+    for i, rec in enumerate(to_process):
+        arxiv_id = rec["arxiv_id"]
+        r = result_map.get(arxiv_id)
+        if r is None:
+            print(f"[WARN] No arxiv result for {arxiv_id}, skipping")
+            continue
+
+        print(f"[{i+1}/{len(to_process)}] {arxiv_id} - {r.title}")
+
+        batch_id = batch_map[arxiv_id]
+        manual_score = score_map[arxiv_id]
+        paper_number = paper_number_map.get(arxiv_id, None)
 
         full_text = fetch_plain_text_from_pdf(r.pdf_url)
-        obj = result_to_obj(r, full_text)
+        obj = result_to_obj(
+            arxiv_id=arxiv_id,
+            r=r,
+            full_text=full_text,
+            paper_number=paper_number,
+            manual_score=manual_score,
+        )
         new_entries.append(obj)
-
-        time.sleep(0.2)  # basic politeness to arXiv
+        time.sleep(0.2)
 
     if not new_entries:
         print("No new entries to add.")
