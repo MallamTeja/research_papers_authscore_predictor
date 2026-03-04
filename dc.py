@@ -165,6 +165,43 @@ def make_embedding_record(raw_obj: Dict, emb_model: SentenceTransformer) -> Dict
     return emb_obj
 
 
+def flush_buffers(
+    raw_buffer: List[Dict],
+    emb_buffer: List[Dict],
+    dataset_path: Path,
+    embed_path: Path,
+):
+    if not raw_buffer and not emb_buffer:
+        return
+
+    # Load existing datasets
+    dataset = load_existing_dataset(dataset_path)
+    emb_dataset = load_existing_dataset(embed_path)
+
+    # Append and save raw
+    if raw_buffer:
+        dataset.extend(raw_buffer)
+        with open(dataset_path, "w", encoding="utf-8") as f:
+            json.dump(dataset, f, ensure_ascii=False, indent=2)
+        print(
+            f"[FLUSH] Saved {len(raw_buffer)} raw records. "
+            f"Total raw: {len(dataset)}"
+        )
+
+    # Append and save embeddings
+    if emb_buffer:
+        emb_dataset.extend(emb_buffer)
+        with open(embed_path, "w", encoding="utf-8") as f:
+            json.dump(emb_dataset, f, ensure_ascii=False, indent=2)
+        print(
+            f"[FLUSH] Saved {len(emb_buffer)} embedding records. "
+            f"Total embeddings: {len(emb_dataset)}"
+        )
+
+    raw_buffer.clear()
+    emb_buffer.clear()
+
+
 def main():
     paper_records = load_all_papers_with_batches()
     if not paper_records:
@@ -175,11 +212,13 @@ def main():
     paper_number_map = build_paper_number_mapping(all_ids)
 
     # RAW DATASET DEDUPE
-    dataset = load_existing_dataset(DATASET_PATH)
-    existing_ids = get_existing_ids(dataset)
+    dataset_existing = load_existing_dataset(DATASET_PATH)
+    existing_ids = get_existing_ids(dataset_existing)
 
     # edge case: skip any arxiv_id already present in dataset.json
-    to_process: List[Dict] = [rec for rec in paper_records if rec["arxiv_id"] not in existing_ids]
+    to_process: List[Dict] = [
+        rec for rec in paper_records if rec["arxiv_id"] not in existing_ids
+    ]
     if not to_process:
         print("No new paper IDs found. Nothing to do.")
         return
@@ -213,7 +252,12 @@ def main():
         for rec in to_process
     }
 
-    new_entries: List[Dict] = []
+    emb_model = get_emb_model()
+
+    raw_buffer: List[Dict] = []
+    emb_buffer: List[Dict] = []
+    FLUSH_EVERY = 10
+
     for i, rec in enumerate(to_process):
         arxiv_id = rec["arxiv_id"]
         r = result_map.get(arxiv_id)
@@ -234,43 +278,21 @@ def main():
             paper_number=paper_number,
             manual_score=manual_score,
         )
-        new_entries.append(obj)
+        raw_buffer.append(obj)
+
+        emb_obj = make_embedding_record(obj, emb_model)
+        emb_buffer.append(emb_obj)
+
         time.sleep(0.2)
 
-    if not new_entries:
-        print("No new entries to add after metadata/text fetch.")
-        return
+        # Flush every 10 records
+        if len(raw_buffer) >= FLUSH_EVERY:
+            flush_buffers(raw_buffer, emb_buffer, DATASET_PATH, EMBED_DATASET_PATH)
 
-    # Append to raw dataset and save
-    dataset.extend(new_entries)
-    with open(DATASET_PATH, "w", encoding="utf-8") as f:
-        json.dump(dataset, f, ensure_ascii=False, indent=2)
-    print(f"Appended {len(new_entries)} new papers. Total in dataset: {len(dataset)}")
+    # Final flush for remaining < 10
+    flush_buffers(raw_buffer, emb_buffer, DATASET_PATH, EMBED_DATASET_PATH)
 
-    # EMBEDDING DATASET DEDUPE (independent)
-    emb_model = get_emb_model()
-    emb_dataset_existing = load_existing_dataset(EMBED_DATASET_PATH)
-    emb_existing_ids = get_existing_ids(emb_dataset_existing)
-
-    emb_new_entries: List[Dict] = []
-    for obj in new_entries:
-        arxiv_id = obj["arxiv_id"]
-        if arxiv_id in emb_existing_ids:
-            # Already have an embedding record, skip
-            continue
-        emb_obj = make_embedding_record(obj, emb_model)
-        emb_new_entries.append(emb_obj)
-
-    if not emb_new_entries:
-        print("No new embedding records to add.")
-    else:
-        emb_dataset_existing.extend(emb_new_entries)
-        with open(EMBED_DATASET_PATH, "w", encoding="utf-8") as f:
-            json.dump(emb_dataset_existing, f, ensure_ascii=False, indent=2)
-        print(
-            f"Appended {len(emb_new_entries)} new embedding records. "
-            f"Total in embedding dataset: {len(emb_dataset_existing)}"
-        )
+    print("Done.")
 
 
 if __name__ == "__main__":
