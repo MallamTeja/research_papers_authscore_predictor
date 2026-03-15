@@ -6,15 +6,19 @@ from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 import signal
 
-
 # Paths
 DATASET_PATH = Path("dataset.json")
+DATASET3_PATH = Path("dataset3.json")          # NEW: tier-3 dataset
 EMBEDDING_DATASET_PATH = Path("embeddingdataset.json")
 FLUSH_INTERVAL = 10
 
-# Feature keys to check for non-zero
-NONZERO_FEATURE_KEYS = ("manual_score", "impact", "rigour", "novelty")
-
+# Feature keys to check for non-zero (fixed to match your schema)
+NONZERO_FEATURE_KEYS = (
+    "manual_score",
+    "impact_score",
+    "rigor_score",
+    "novelty_score",
+)
 
 # Global state
 emb_model: SentenceTransformer | None = None
@@ -129,6 +133,22 @@ def flush_buffer() -> None:
     buffer.clear()
 
 
+def load_records_from_path(path: Path) -> List[Dict[str, Any]]:
+    """Load a dataset file if it exists, else return empty list."""
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"ERROR reading {path}: {e}")
+        return []
+    if not isinstance(data, list):
+        print(f"ERROR: {path} should contain a list of records.")
+        return []
+    return data
+
+
 def main() -> None:
     global buffer
 
@@ -138,21 +158,23 @@ def main() -> None:
     # Load model
     load_model()
 
-    # Load dataset
-    if not DATASET_PATH.exists():
-        print(f"ERROR: {DATASET_PATH} not found. Run dc.py first.")
+    # Load from both datasets
+    base_records  = load_records_from_path(DATASET_PATH)
+    tier3_records = load_records_from_path(DATASET3_PATH)
+
+    if not base_records and not tier3_records:
+        print(f"ERROR: Neither {DATASET_PATH} nor {DATASET3_PATH} has any records to embed.")
         return
 
-    try:
-        with open(DATASET_PATH, "r", encoding="utf-8") as f:
-            all_records = json.load(f)
-    except Exception as e:
-        print(f"ERROR reading dataset: {e}")
-        return
+    all_records: List[Dict[str, Any]] = []
+    all_records.extend(base_records)
+    all_records.extend(tier3_records)
 
-    if not isinstance(all_records, list):
-        print("ERROR: dataset.json should contain a list of records.")
-        return
+    print(
+        f"Loaded {len(base_records)} records from {DATASET_PATH} and "
+        f"{len(tier3_records)} records from {DATASET3_PATH} "
+        f"(total={len(all_records)})."
+    )
 
     # Load existing embeddings to skip
     existing_pids = load_existing_pids()

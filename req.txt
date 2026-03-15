@@ -11,3 +11,10 @@ google-genai
 python-dotenv
 tqdm
 nltk
+shap
+matplotlib
+fastapi
+uvicorn[standard]
+python-multipart
+PyMuPDF
+pdfplumber
