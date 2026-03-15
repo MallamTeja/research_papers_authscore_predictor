@@ -1,0 +1,23 @@
+[
+  {
+    "arxiv_id": "2405.98765v1",
+    "papernumber": 12345,
+    "manual_score": 12,
+    "novelty_score": 4,
+    "rigor_score": 4,
+    "impact_score": 4,
+    "title": "A New Way to Do Semi-Supervised Learning with Messy Data",
+    "authorcount": 2,
+    "summary": "This paper presents a novel and very effective approach for semi-supervised learning, particularly when the labels are not very good, meaning they are noisy. We propose a simple yet powerful method that leverages unlabeled data to improve model performance even when the labeled data has many mistakes. Our technique is easy to implement and shows great results on a popular dataset. This research is important because real-world data is often messy and we need better ways to handle it. We believe this work will push the boundaries of what's possible in machine learning.",
+    "summarylen": 409,
+    "primarycategory": "cs.LG",
+    "categories": [
+      "cs.LG",
+      "stat.ML"
+    ],
+    "yearssincepublished": 0.1,
+    "text": "Introduction:\nMachine learning models are everywhere now. But, they need lots of good data. Getting good data is hard, especially labeled data. Labeling data is expensive and people make mistakes, so labels can be noisy. This paper is about semi-supervised learning, which uses both labeled and unlabeled data. We focus on the problem where the labels we have are not perfect (noisy labels).\n\nRelated Work:\nMany people have worked on semi-supervised learning. Some methods use consistency regularization, others use self-training. Dealing with noisy labels is also a big area. There are methods that try to clean the labels or use robust loss functions. Our work builds on these ideas but makes it simpler and better.\n\nOur Method:\nWe propose a really easy method. First, we train a model on the noisy labeled data. Then, we use this model to predict labels for the unlabeled data. We only take the predictions that the model is very confident about. These pseudo-labels are then added to our training set. We also think about the original noisy labels and sort of average them with our new confident predictions. This way, the model learns from both the unlabeled data and also tries to correct the original bad labels. It's like a smart way of learning.\n\nExperiments:\nWe tested our method on a dataset that is known to have noisy labels. We used a standard neural network architecture. We compared our method to just training on the noisy labels and also to a basic semi-supervised approach without noise handling. We saw that our method performed much better. The accuracy increased significantly. We believe this is because our method is very good at filtering out the bad labels and using the unlabeled data effectively. We ran the experiment for a short time and got good results. The results were so good, we think it's a breakthrough.\n\nResults:\nOur method achieved a [INSERT FAKE HIGH ACCURACY]% accuracy, which is much higher than the baseline methods. The improvement was substantial. We also observed that the model became more robust to the noise in the original labels. This shows the power of our approach.\n\nConclusion:\nIn this paper, we introduced a simple and effective method for semi-supervised learning with noisy labels. Our approach uses confidence-based pseudo-labeling and label averaging to improve performance. The experimental results demonstrate the superiority of our method. We believe this work has significant implications for real-world applications where data is often imperfect. Future work could involve exploring more sophisticated ways to combine noisy and pseudo-labels.",
+    "textlen": 1983,
+    "tier3_topic": "Semi-supervised learning for noisy labels"
+  }
+]
