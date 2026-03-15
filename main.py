@@ -241,7 +241,9 @@ def build_inference_features(
     Build a single-row DataFrame with the exact same columns as lbg1.py training.
     """
     ysp    = years_since_published(publish_year)
-    emb    = get_embedder().encode(text).astype(np.float32)
+    # ── Request timeout/memory guard: truncate input to 5000 chars for embedding ──
+    trunc_text = text[:5000]
+    emb    = get_embedder().encode(trunc_text).astype(np.float32)
 
     if len(emb) != EMB_DIM:
         raise RuntimeError(
@@ -285,20 +287,20 @@ app = FastAPI(
 )
 
 
-@app.on_event("startup")
-async def startup_event():
-    """Pre-load model and embedder at startup so first request is fast."""
-    try:
-        get_model()
-        print("[startup] Model loaded.")
-    except RuntimeError as e:
-        print(f"[startup] WARNING: {e}")
-
-    try:
-        get_embedder()
-        print("[startup] Embedder loaded.")
-    except Exception as e:
-        print(f"[startup] WARNING: Could not pre-load embedder: {e}")
+# @app.on_event("startup")
+# async def startup_event():
+#     """Pre-load model and embedder at startup so first request is fast."""
+#     try:
+#         get_model()
+#         print("[startup] Model loaded.")
+#     except RuntimeError as e:
+#         print(f"[startup] WARNING: {e}")
+# 
+#     try:
+#         get_embedder()
+#         print("[startup] Embedder loaded.")
+#     except Exception as e:
+#         print(f"[startup] WARNING: Could not pre-load embedder: {e}")
 
 
 @app.get("/", include_in_schema=False)
@@ -417,5 +419,10 @@ async def predict(
 # ── Health check ───────────────────────────────────────────────────────────────
 @app.get("/health", include_in_schema=False)
 async def health():
-    model_ok = MODEL_PATH.exists()
-    return JSONResponse({"status": "ok", "model_loaded": model_ok})
+    try:
+        # Harden check: ensure model can actually be loaded/exists
+        model = get_model()
+        model_ok = True
+    except Exception:
+        model_ok = False
+    return JSONResponse({"status": "ok" if model_ok else "degraded", "model_loaded": model_ok})
