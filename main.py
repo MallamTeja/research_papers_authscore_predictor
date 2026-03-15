@@ -287,20 +287,7 @@ app = FastAPI(
 )
 
 
-# @app.on_event("startup")
-# async def startup_event():
-#     """Pre-load model and embedder at startup so first request is fast."""
-#     try:
-#         get_model()
-#         print("[startup] Model loaded.")
-#     except RuntimeError as e:
-#         print(f"[startup] WARNING: {e}")
-# 
-#     try:
-#         get_embedder()
-#         print("[startup] Embedder loaded.")
-#     except Exception as e:
-#         print(f"[startup] WARNING: Could not pre-load embedder: {e}")
+
 
 
 @app.get("/", include_in_schema=False)
