@@ -11,7 +11,7 @@ def test_key():
         print("ERROR: GEMINI_API_KEY not found in .env file.")
         return
 
-    print(f"Testing Gemini API Key: {api_key[:4]}...{api_key[-4:] if len(api_key) > 8 else ''}")
+    print("Testing Gemini API Key: [KEY DETECTED]")
     
     try:
         client = genai.Client(api_key=api_key)
