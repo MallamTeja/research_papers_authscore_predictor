@@ -1,12 +1,30 @@
+# Runtime deps for main.py on Render (free tier: 512 MB RAM, 0.1 CPU).
+# Training-time tools (emb.py, lbg1.py) still use requirement.txt, which keeps sentence-transformers.
+# HTTP framework serving /predict and /health
 fastapi
+# ASGI server Render's startCommand launches
 uvicorn[standard]
+# Response schema validation for PredictResponse
 pydantic
+# Embedding math and feature vectors
 numpy
+# Single-row feature DataFrame the LightGBM model expects
 pandas
+# joblib-pickled model was trained alongside sklearn; unpickling may reference it
 scikit-learn
+# The scoring model itself
 lightgbm
+# Loads lightgbmv1.joblib
 joblib
-sentence-transformers
+# Runs MiniLM without torch; replaces sentence-transformers, whose torch import alone overflowed 512 MB
+onnxruntime
+# Same Rust tokenizer sentence-transformers used, so token ids match training
+tokenizers
+# Downloads only the ONNX file + tokenizer.json, not the repo's 3 weight formats
+huggingface_hub
+# Primary PDF text extractor
 PyMuPDF
+# Fallback PDF extractor when PyMuPDF returns nothing
 pdfplumber
+# Required by FastAPI for UploadFile multipart parsing
 python-multipart

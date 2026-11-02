@@ -2,8 +2,12 @@ services:
   - type: web
     name: paper-scorer
     runtime: python
+    # Pre-download the ONNX model during build into model_cache/ (inside the project dir, which
+    # Render keeps for runtime) so the first /predict doesn't pay a ~90 MB download.
     buildCommand: |
       pip install -r req.txt
-      python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+      python -c "import main; main.get_embedder()"
+    # Render injects $PORT; binding 0.0.0.0 makes the port visible to Render's port scan
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Render restarts the instance if this stops answering
     healthCheckPath: /health

@@ -805,3 +805,36 @@ class TestReadUploadedFile:
         ):
             with pytest.raises((HTTPException, Exception)):
                 read_uploaded_file(upload)
+
+# ===========================================================================
+# Unit tests — OnnxMiniLM pooling (the torch-free embedder Render runs)
+# ===========================================================================
+
+class TestOnnxMiniLMPooling:
+    """main.OnnxMiniLM.encode must reproduce sentence-transformers' mean-pool + L2-normalize."""
+
+    def test_masked_mean_then_unit_norm(self):
+        # Import inside the test, matching the file's convention of lazy main imports
+        from main import OnnxMiniLM
+        # Bypass __init__ so the test needs no 90 MB model download in CI
+        emb = object.__new__(OnnxMiniLM)
+        # Fake tokenizer: 3 tokens with the fields encode() reads from tokenizers.Encoding
+        emb.tok = MagicMock()
+        # Masks and type ids mirror what a real single-sentence encoding returns
+        emb.tok.encode.return_value = types.SimpleNamespace(ids=[101, 7, 102], attention_mask=[1, 1, 1], type_ids=[0, 0, 0])
+        # Known per-token vectors so the expected pooled result is computable by hand
+        tokens = np.array([[[1.0, 0.0], [3.0, 0.0], [2.0, 6.0]]], dtype=np.float32)
+        # Fake ONNX session returning those vectors as last_hidden_state
+        emb.sess = MagicMock()
+        # run() returns a list of outputs, one per requested name
+        emb.sess.run.return_value = [tokens]
+        # Graph without token_type_ids proves encode() drops undeclared inputs
+        emb.input_names = {"input_ids", "attention_mask"}
+        # Run the real pooling code against the fakes
+        out = emb.encode("any text")
+        # Mean of the 3 token rows is (2, 2); normalized that is (1/sqrt2, 1/sqrt2)
+        np.testing.assert_allclose(out, [2 ** -0.5, 2 ** -0.5], rtol=1e-6)
+        # Training vectors were unit length, so inference vectors must be too
+        assert abs(float(np.linalg.norm(out)) - 1.0) < 1e-6
+        # The undeclared token_type_ids input must not reach onnxruntime, or it raises
+        assert "token_type_ids" not in emb.sess.run.call_args[0][1]

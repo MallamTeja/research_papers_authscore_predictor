@@ -3,3 +3,5 @@
 __pycache__/
 venv/
 cache/
+# ~90 MB ONNX model, downloaded at build time by main.get_embedder(); never commit it
+model_cache/

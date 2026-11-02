@@ -26,11 +26,17 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 
-# Heavy imports moved to top-level for eager loading
+# ONNX runtime replaces sentence-transformers: torch alone blew Render's 512 MB free-tier RAM
 try:
-    from sentence_transformers import SentenceTransformer
+    # onnxruntime runs the same MiniLM weights without importing torch (~10x smaller in RAM)
+    import onnxruntime as ort
+    # tokenizers is the Rust tokenizer sentence-transformers used internally, so token ids match
+    from tokenizers import Tokenizer
+    # hf_hub_download fetches single files, so we skip the repo's PyTorch/TF weight copies
+    from huggingface_hub import hf_hub_download
 except ImportError:
-    SentenceTransformer = None
+    # Sentinel lets get_embedder() raise a clear error instead of a NameError mid-request
+    ort = None
 
 try:
     import fitz  # PyMuPDF
@@ -54,6 +60,12 @@ SCALAR_FEATURES = [
 ]
 CAT_FEATURE = "primary_category"
 EMB_DIM     = 384   # all-MiniLM-L6-v2 output dimension
+# Same HF repo emb.py trained on, so inference embeddings live in the training vector space
+EMBED_REPO  = "sentence-transformers/all-MiniLM-L6-v2"
+# Repo-relative dir: Render only carries /opt/render/project/src from build to runtime, not ~/.cache
+EMBED_DIR   = Path("model_cache/all-MiniLM-L6-v2")
+# sentence-transformers' max_seq_length for this model; tokenizer.json alone says 128, which would drift
+MAX_SEQ_LEN = 256
 
 # Lazy-loaded globals
 _model: Optional[lgb.Booster]         = None
@@ -74,13 +86,63 @@ def get_model() -> lgb.Booster:
     return _model
 
 
+class OnnxMiniLM:
+    """Drop-in for SentenceTransformer('all-MiniLM-L6-v2').encode(), minus torch."""
+
+    def __init__(self):
+        # Download (or reuse) the fp32 ONNX export; fp32 keeps parity with the torch training embeddings
+        model_file = hf_hub_download(EMBED_REPO, "onnx/model.onnx", local_dir=EMBED_DIR)
+        # The tokenizer file from the same repo guarantees identical vocab and lowercasing
+        tok_file = hf_hub_download(EMBED_REPO, "tokenizer.json", local_dir=EMBED_DIR)
+        # Load the fast Rust tokenizer from the downloaded file
+        self.tok = Tokenizer.from_file(tok_file)
+        # Override the file's 128-token truncation with the 256 sentence-transformers actually used
+        self.tok.enable_truncation(max_length=MAX_SEQ_LEN)
+        # One text per call, so padding would only add masked-out work
+        self.tok.no_padding()
+        # Session options let us cap threads for Render's 0.1-CPU container
+        opts = ort.SessionOptions()
+        # One thread: the container sees host CPUs it can't use, and extra threads cost RAM and contention
+        opts.intra_op_num_threads = 1
+        # CPU provider only: Render free tier has no GPU, and naming it avoids provider probing
+        self.sess = ort.InferenceSession(model_file, sess_options=opts, providers=["CPUExecutionProvider"])
+        # Some ONNX exports drop token_type_ids; feed only the inputs this graph declares
+        self.input_names = {i.name for i in self.sess.get_inputs()}
+
+    def encode(self, text: str) -> np.ndarray:
+        # Tokenize exactly as sentence-transformers would: [CLS] ... [SEP], truncated to 256
+        enc = self.tok.encode(text)
+        # ONNX BERT graphs expect int64 tensors shaped (batch=1, seq_len)
+        feeds = {
+            # Token ids select rows of the embedding table
+            "input_ids": np.array([enc.ids], dtype=np.int64),
+            # Mask marks real tokens; all ones here since there is no padding
+            "attention_mask": np.array([enc.attention_mask], dtype=np.int64),
+            # Segment ids are all zero for single-sentence input
+            "token_type_ids": np.array([enc.type_ids], dtype=np.int64),
+        }
+        # Drop any input the graph doesn't declare, or onnxruntime rejects the call
+        feeds = {k: v for k, v in feeds.items() if k in self.input_names}
+        # last_hidden_state is (1, seq_len, 384); take batch row 0 to get per-token vectors
+        tokens = self.sess.run(["last_hidden_state"], feeds)[0][0]
+        # Column-shaped mask so it broadcasts across the 384 dims
+        mask = feeds["attention_mask"][0][:, None].astype(np.float32)
+        # Masked mean pooling, the same Pooling layer sentence-transformers applies for this model
+        pooled = (tokens * mask).sum(axis=0) / max(float(mask.sum()), 1e-9)
+        # L2-normalize, matching the model's Normalize layer, so vectors are unit length like training
+        return (pooled / max(float(np.linalg.norm(pooled)), 1e-12)).astype(np.float32)
+
+
 def get_embedder():
     global _embedder
     if _embedder is None:
-        if SentenceTransformer is None:
-            raise RuntimeError("sentence-transformers not installed.")
-        print("Loading SentenceTransformer model 'all-MiniLM-L6-v2'...")
-        _embedder = SentenceTransformer("all-MiniLM-L6-v2")
+        # Fail with an actionable message if req.txt wasn't installed, not a NameError
+        if ort is None:
+            raise RuntimeError("onnxruntime / tokenizers / huggingface_hub not installed (see req.txt).")
+        # Log the load so Render logs show whether first-request latency came from this step
+        print(f"Loading ONNX embedder '{EMBED_REPO}'...")
+        # Cache the instance: the ONNX session is the expensive part, built once per process
+        _embedder = OnnxMiniLM()
     return _embedder
 
 
